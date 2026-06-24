@@ -4,14 +4,11 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, NotFound
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 from .serializers import ChatRequestSerializer, ChatResponseSerializer, EmailSerializer
 from django.conf import settings
 from django.contrib.sessions.models import Session
 import uuid
-import re
 
 
 
@@ -49,9 +46,9 @@ class ChatView(CreateAPIView):
     def get_llm(cls):
         if cls._llm_instance is None:
             cls._llm_instance = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",  
+                model="gemini-2.5-flash",  
                 google_api_key=settings.GEMINI_API_KEY,
-                temperature=0.7,
+                temperature=0.5,
             )
         return cls._llm_instance
 
@@ -87,17 +84,18 @@ class ChatView(CreateAPIView):
         
         # Chat processing logic
         chat_history_key = f'chat_history_{session_id}'
-        chat_history = ChatMessageHistory()
         
         # Load last 10 messages (5 exchanges) for better context
         history_data = session_data.get(chat_history_key, [])
         recent_history = history_data[-10:] if len(history_data) > 10 else history_data
         
+        # Build history as LangChain message objects
+        history_messages = []
         for item in recent_history:
             if item['type'] == 'human':
-                chat_history.add_user_message(item['content'])
+                history_messages.append(HumanMessage(content=item['content']))
             elif item['type'] == 'ai':
-                chat_history.add_ai_message(item['content'])
+                history_messages.append(AIMessage(content=item['content']))
 
         # Use cached LLM instance
         try:
@@ -128,34 +126,12 @@ Maintain a professional, helpful, and educational tone in all responses."""),
         
         chain = prompt | llm
         
-        runnable_with_history = RunnableWithMessageHistory(
-            chain,
-            lambda session_id: chat_history,
-            input_messages_key="input",
-            history_messages_key="history",
-        )
-        
-        config = {"configurable": {"session_id": session_id}}
+        # Invoke chain directly with history messages (no deprecated RunnableWithMessageHistory)
         try:
-            response = runnable_with_history.invoke({"input": user_message}, config=config)
+            response = chain.invoke({"input": user_message, "history": history_messages})
             ai_response = response.content
         except Exception as e:
             return Response({"detail": f"Chat service error: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        # Ensure plain-text output by stripping common math delimiters
-        def _strip_math_delimiters(text: str) -> str:
-            if not isinstance(text, str):
-                return text
-            # Remove display math and inline LaTeX delimiters while preserving content
-            text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
-            text = re.sub(r"\$(.*?)\$", r"\1", text, flags=re.DOTALL)
-            text = text.replace(r"\(", "").replace(r"\)", "")
-            text = text.replace(r"\[", "").replace(r"\]", "")
-            # Remove any stray dollar signs
-            text = text.replace("$", "")
-            return text
-
-        ai_response = _strip_math_delimiters(ai_response)
         
         # Save updated history - keep reasonable amount for production level use
         full_history = session_data.get(chat_history_key, [])
