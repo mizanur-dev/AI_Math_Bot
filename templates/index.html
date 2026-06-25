@@ -388,7 +388,103 @@
         .chat-messages::-webkit-scrollbar-thumb:hover {
             background: rgba(59, 130, 246, 0.5);
         }
+        /* Math & Markdown rendering styles */
+        .message.bot .message-content .katex {
+            font-size: 1.1em;
+        }
+
+        .message.bot .message-content .katex-display {
+            margin: 12px 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 8px 0;
+        }
+
+        .message.bot .message-content p {
+            margin: 8px 0;
+            line-height: 1.7;
+        }
+
+        .message.bot .message-content p:first-child {
+            margin-top: 0;
+        }
+
+        .message.bot .message-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        .message.bot .message-content strong {
+            color: #93c5fd;
+            font-weight: 700;
+        }
+
+        .message.bot .message-content em {
+            color: #c4b5fd;
+            font-style: italic;
+        }
+
+        .message.bot .message-content code {
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+            color: #93c5fd;
+        }
+
+        .message.bot .message-content pre {
+            background: rgba(10, 25, 41, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+
+        .message.bot .message-content pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: 0.88em;
+            line-height: 1.5;
+        }
+
+        .message.bot .message-content ul,
+        .message.bot .message-content ol {
+            margin: 8px 0;
+            padding-left: 24px;
+        }
+
+        .message.bot .message-content li {
+            margin: 4px 0;
+            line-height: 1.6;
+        }
+
+        .message.bot .message-content h3,
+        .message.bot .message-content h4 {
+            color: #93c5fd;
+            margin: 14px 0 6px 0;
+            font-weight: 700;
+        }
+
+        .message.bot .message-content hr {
+            border: none;
+            border-top: 1px solid rgba(59, 130, 246, 0.2);
+            margin: 12px 0;
+        }
+
+        .message.bot .message-content blockquote {
+            border-left: 3px solid #3b82f6;
+            padding-left: 12px;
+            margin: 8px 0;
+            color: rgba(255, 255, 255, 0.7);
+        }
     </style>
+    <!-- KaTeX for LaTeX math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -466,7 +562,7 @@
             emailSubmitBtn.textContent = 'Connecting...';
 
             try {
-                const response = await fetch(`${API_BASE_URL}/set_email/`, {
+                const response = await fetch(`${API_BASE_URL}/api/set_email/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -497,15 +593,96 @@
             }
         }
 
+        // Convert basic markdown to HTML (for bot messages)
+        function markdownToHtml(text) {
+            // Escape HTML entities first
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Code blocks (``` ... ```)
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+            // Inline code
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+            // Headers (### and ####)
+            html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+            html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+
+            // Bold (**text**)
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+            // Italic (*text*) — but not inside LaTeX \*
+            html = html.replace(/(?<!\\)\*(.+?)(?<!\\)\*/g, '<em>$1</em>');
+
+            // Unordered lists
+            html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+            html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+            // Ordered lists
+            html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+            // Blockquote
+            html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+            // Horizontal rule
+            html = html.replace(/^---$/gm, '<hr>');
+
+            // Paragraphs: convert double newlines to paragraph breaks
+            html = html.replace(/\n\n/g, '</p><p>');
+            // Single newlines to <br> (except inside pre/ul/ol)
+            html = html.replace(/\n/g, '<br>');
+            html = '<p>' + html + '</p>';
+
+            // Clean up empty paragraphs and fix nesting
+            html = html.replace(/<p><\/p>/g, '');
+            html = html.replace(/<p>(<h[34]>)/g, '$1');
+            html = html.replace(/(<\/h[34]>)<\/p>/g, '$1');
+            html = html.replace(/<p>(<ul>)/g, '$1');
+            html = html.replace(/(<\/ul>)<\/p>/g, '$1');
+            html = html.replace(/<p>(<pre>)/g, '$1');
+            html = html.replace(/(<\/pre>)<\/p>/g, '$1');
+            html = html.replace(/<p>(<hr>)<\/p>/g, '$1');
+            html = html.replace(/<p>(<blockquote>)/g, '$1');
+            html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
+
+            return html;
+        }
+
+        // Render KaTeX math in an element
+        function renderMath(element) {
+            if (typeof renderMathInElement !== 'undefined') {
+                renderMathInElement(element, {
+                    delimiters: [
+                        { left: '$$', right: '$$', display: true },
+                        { left: '\\[', right: '\\]', display: true },
+                        { left: '$', right: '$', display: false },
+                        { left: '\\(', right: '\\)', display: false },
+                    ],
+                    throwOnError: false,
+                    trust: true,
+                });
+            }
+        }
+
         // Add message to chat
         function addMessage(content, isUser) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
-            
+
             const messageContent = document.createElement('div');
             messageContent.className = 'message-content';
-            messageContent.textContent = content;
-            
+
+            if (isUser) {
+                messageContent.textContent = content;
+            } else {
+                // Render markdown + LaTeX for bot messages
+                messageContent.innerHTML = markdownToHtml(content);
+                renderMath(messageContent);
+            }
+
             messageDiv.appendChild(messageContent);
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -524,7 +701,7 @@
             loading.classList.add('active');
 
             try {
-                const response = await fetch(`${API_BASE_URL}/chat/`, {
+                const response = await fetch(`${API_BASE_URL}/api/chat/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
