@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-your-secret-key-here'  # Change this in production
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['chat.mathos.cloud', 'localhost', '127.0.0.1']
 
 
 # Application definition
@@ -42,11 +42,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'corsheaders',
     'chatbot',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -133,3 +135,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Gemini API Key from .env
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = True
