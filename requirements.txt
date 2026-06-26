@@ -5,4 +5,5 @@ langchain-google-genai
 google-genai
 langdetect
 python-dotenv
+django-cors-headers
 langchain-community
