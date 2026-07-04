@@ -9,6 +9,7 @@ from .serializers import ChatRequestSerializer, ChatResponseSerializer, EmailSer
 from django.conf import settings
 from django.contrib.sessions.models import Session
 import uuid
+import re
 
 
 
@@ -146,6 +147,19 @@ Maintain a professional, helpful, and educational tone in all responses."""),
         session_data[chat_history_key] = full_history
         session_obj.session_data = Session.objects.encode(session_data)
         session_obj.save()
-        
-        response_serializer = ChatResponseSerializer({'response': ai_response})
+        # Clean up Markdown-style emphasis (asterisks/underscores) so responses read naturally
+        def _strip_markdown_emphasis(text: str) -> str:
+            if not text:
+                return text
+            # Remove bold/italic markers like **bold**, __bold__, *italic*, _italic_
+            text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.S)
+            text = re.sub(r"__(.*?)__", r"\1", text, flags=re.S)
+            text = re.sub(r"\*(\w.*?)\*", r"\1", text, flags=re.S)
+            text = re.sub(r"_(\w.*?)_", r"\1", text, flags=re.S)
+            # Remove leading list bullets (lines starting with '* ' or '- ')
+            text = re.sub(r"(?m)^\s*[\*\-]\s+", "", text)
+            return text
+
+        cleaned_response = _strip_markdown_emphasis(ai_response)
+        response_serializer = ChatResponseSerializer({'response': cleaned_response})
         return Response(response_serializer.data, status=status.HTTP_200_OK)
