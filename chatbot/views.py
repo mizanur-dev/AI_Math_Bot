@@ -9,7 +9,6 @@ from .serializers import ChatRequestSerializer, ChatResponseSerializer, EmailSer
 from django.conf import settings
 from django.contrib.sessions.models import Session
 import uuid
-import re
 
 
 
@@ -111,10 +110,27 @@ class ChatView(CreateAPIView):
 Your responsibilities:
 - Provide detailed step-by-step explanations for mathematical problems
 - Show all working steps clearly and logically
-- Use proper mathematical notation and terminology
 - Explain concepts when necessary to aid understanding
 - Always respond in the same language as the user's query
 - Cover topics including: Algebra, Calculus, Geometry, Statistics, Trigonometry, Linear Algebra, Discrete Mathematics, and more
+
+MATH FORMATTING RULES (CRITICAL - you MUST follow these exactly):
+- For ALL mathematical expressions, variables, numbers in equations, and symbols, you MUST use LaTeX wrapped in dollar sign delimiters.
+- Use single dollar signs $...$ for inline math expressions within a sentence. Example: The result is $x = 5$.
+- Use double dollar signs $$...$$ for display math (standalone equations on their own line). Example:
+$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
+- Use LaTeX commands for all math operations: \\frac{{}}{{}}, \\times, \\div, \\sqrt{{}}, \\pm, \\leq, \\geq, \\neq, \\sum, \\int, \\infty, etc.
+- For percentages, write $17\\%$ not 17%.
+- For currency values mentioned in math context, write $\\$10.00$ for inline.
+- NEVER write raw LaTeX commands without dollar sign delimiters.
+- NEVER use \\[ ... \\] or \\( ... \\) delimiters. ONLY use $...$ and $$...$$.
+
+TEXT FORMATTING RULES:
+- Use **bold** for step labels: **Step 1:** , **Step 2:** , etc.
+- Use blank lines between steps for readability.
+- Use markdown lists (- or 1. 2. 3.) when listing items.
+- Separate explanation text from math equations clearly.
+- Keep plain text (non-math) outside of dollar sign delimiters.
 
 For non-mathematical queries:
 - Politely inform the user that you specialize in mathematics only
@@ -147,19 +163,6 @@ Maintain a professional, helpful, and educational tone in all responses."""),
         session_data[chat_history_key] = full_history
         session_obj.session_data = Session.objects.encode(session_data)
         session_obj.save()
-        # Clean up Markdown-style emphasis (asterisks/underscores) so responses read naturally
-        def _strip_markdown_emphasis(text: str) -> str:
-            if not text:
-                return text
-            # Remove bold/italic markers like **bold**, __bold__, *italic*, _italic_
-            text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.S)
-            text = re.sub(r"__(.*?)__", r"\1", text, flags=re.S)
-            text = re.sub(r"\*(\w.*?)\*", r"\1", text, flags=re.S)
-            text = re.sub(r"_(\w.*?)_", r"\1", text, flags=re.S)
-            # Remove leading list bullets (lines starting with '* ' or '- ')
-            text = re.sub(r"(?m)^\s*[\*\-]\s+", "", text)
-            return text
 
-        cleaned_response = _strip_markdown_emphasis(ai_response)
-        response_serializer = ChatResponseSerializer({'response': cleaned_response})
+        response_serializer = ChatResponseSerializer({'response': ai_response})
         return Response(response_serializer.data, status=status.HTTP_200_OK)

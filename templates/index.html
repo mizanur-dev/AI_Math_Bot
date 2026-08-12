@@ -483,8 +483,8 @@
     </style>
     <!-- KaTeX for LaTeX math rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -593,78 +593,138 @@
             }
         }
 
-        // Convert basic markdown to HTML (for bot messages)
+        /**
+         * Convert markdown to HTML while preserving LaTeX math blocks.
+         * Strategy:
+         *   1. Extract all LaTeX blocks ($$...$$ and $...$) and replace with placeholders
+         *   2. Process markdown on the remaining text safely
+         *   3. Restore the LaTeX blocks from placeholders
+         * This prevents the markdown parser from corrupting LaTeX commands.
+         */
         function markdownToHtml(text) {
-            // Escape HTML entities first
-            let html = text
+            if (!text) return '';
+
+            // ── Step 1: Extract and protect LaTeX blocks ──
+            const latexBlocks = [];
+            let placeholder = (idx) => `%%LATEX_BLOCK_${idx}%%`;
+
+            // Protect display math ($$...$$) first — greedy match across lines
+            let processed = text.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+                const idx = latexBlocks.length;
+                latexBlocks.push(match);
+                return placeholder(idx);
+            });
+
+            // Protect inline math ($...$) — single line, non-greedy
+            processed = processed.replace(/\$([^\$\n]+?)\$/g, (match) => {
+                const idx = latexBlocks.length;
+                latexBlocks.push(match);
+                return placeholder(idx);
+            });
+
+            // Also protect code blocks
+            const codeBlocks = [];
+            let codePlaceholder = (idx) => `%%CODE_BLOCK_${idx}%%`;
+
+            processed = processed.replace(/```(\w*)\n([\s\S]*?)```/g, (match) => {
+                const idx = codeBlocks.length;
+                codeBlocks.push(match);
+                return codePlaceholder(idx);
+            });
+
+            // ── Step 2: Escape HTML entities (only on non-LaTeX text) ──
+            processed = processed
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
 
-            // Code blocks (``` ... ```)
-            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+            // ── Step 3: Process markdown ──
+
+            // Restore code blocks and convert to HTML
+            processed = processed.replace(/%%CODE_BLOCK_(\d+)%%/g, (_, idx) => {
+                const block = codeBlocks[parseInt(idx)];
+                const codeContent = block.replace(/```\w*\n([\s\S]*?)```/, '$1');
+                const escaped = codeContent
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                return `<pre><code>${escaped}</code></pre>`;
+            });
 
             // Inline code
-            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            processed = processed.replace(/`([^`]+)`/g, '<code>$1</code>');
 
             // Headers (### and ####)
-            html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-            html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+            processed = processed.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+            processed = processed.replace(/^### (.+)$/gm, '<h3>$1</h3>');
 
             // Bold (**text**)
-            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            processed = processed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-            // Italic (*text*) — but not inside LaTeX \*
-            html = html.replace(/(?<!\\)\*(.+?)(?<!\\)\*/g, '<em>$1</em>');
+            // Italic (*text*) — avoid matching LaTeX placeholder markers
+            processed = processed.replace(/(?<![\\%])\*([^\*]+?)(?<!\\)\*/g, '<em>$1</em>');
 
             // Unordered lists
-            html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
-            html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+            processed = processed.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+            processed = processed.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
 
             // Ordered lists
-            html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+            processed = processed.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
 
             // Blockquote
-            html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+            processed = processed.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
 
             // Horizontal rule
-            html = html.replace(/^---$/gm, '<hr>');
+            processed = processed.replace(/^---$/gm, '<hr>');
 
-            // Paragraphs: convert double newlines to paragraph breaks
-            html = html.replace(/\n\n/g, '</p><p>');
-            // Single newlines to <br> (except inside pre/ul/ol)
-            html = html.replace(/\n/g, '<br>');
-            html = '<p>' + html + '</p>';
+            // Paragraphs: double newlines to paragraph breaks
+            processed = processed.replace(/\n\n/g, '</p><p>');
+            // Single newlines to <br>
+            processed = processed.replace(/\n/g, '<br>');
+            processed = '<p>' + processed + '</p>';
 
             // Clean up empty paragraphs and fix nesting
-            html = html.replace(/<p><\/p>/g, '');
-            html = html.replace(/<p>(<h[34]>)/g, '$1');
-            html = html.replace(/(<\/h[34]>)<\/p>/g, '$1');
-            html = html.replace(/<p>(<ul>)/g, '$1');
-            html = html.replace(/(<\/ul>)<\/p>/g, '$1');
-            html = html.replace(/<p>(<pre>)/g, '$1');
-            html = html.replace(/(<\/pre>)<\/p>/g, '$1');
-            html = html.replace(/<p>(<hr>)<\/p>/g, '$1');
-            html = html.replace(/<p>(<blockquote>)/g, '$1');
-            html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
+            processed = processed.replace(/<p><\/p>/g, '');
+            processed = processed.replace(/<p>(<h[34]>)/g, '$1');
+            processed = processed.replace(/(<\/h[34]>)<\/p>/g, '$1');
+            processed = processed.replace(/<p>(<ul>)/g, '$1');
+            processed = processed.replace(/(<\/ul>)<\/p>/g, '$1');
+            processed = processed.replace(/<p>(<pre>)/g, '$1');
+            processed = processed.replace(/(<\/pre>)<\/p>/g, '$1');
+            processed = processed.replace(/<p>(<hr>)<\/p>/g, '$1');
+            processed = processed.replace(/<p>(<blockquote>)/g, '$1');
+            processed = processed.replace(/(<\/blockquote>)<\/p>/g, '$1');
 
-            return html;
+            // ── Step 4: Restore LaTeX blocks ──
+            processed = processed.replace(/%%LATEX_BLOCK_(\d+)%%/g, (_, idx) => {
+                return latexBlocks[parseInt(idx)];
+            });
+
+            return processed;
         }
 
-        // Render KaTeX math in an element
+        /**
+         * Render KaTeX math in a DOM element.
+         * Only call this on bot message elements — never on user messages.
+         */
         function renderMath(element) {
-            if (typeof renderMathInElement !== 'undefined') {
-                renderMathInElement(element, {
-                    delimiters: [
-                        { left: '$$', right: '$$', display: true },
-                        { left: '\\[', right: '\\]', display: true },
-                        { left: '$', right: '$', display: false },
-                        { left: '\\(', right: '\\)', display: false },
-                    ],
-                    throwOnError: false,
-                    trust: true,
-                });
+            if (typeof renderMathInElement === 'undefined') {
+                console.warn('KaTeX auto-render not loaded yet');
+                return;
             }
+            renderMathInElement(element, {
+                delimiters: [
+                    { left: '$$', right: '$$', display: true },
+                    { left: '$', right: '$', display: false },
+                    { left: '\\(', right: '\\)', display: false },
+                    { left: '\\[', right: '\\]', display: true },
+                ],
+                throwOnError: false,
+                trust: true,
+                ignoredTags: [
+                    'script', 'noscript', 'style', 'textarea', 'pre', 'code',
+                ],
+            });
         }
 
         // Add message to chat
@@ -676,9 +736,11 @@
             messageContent.className = 'message-content';
 
             if (isUser) {
+                // Use textContent for user messages — prevents $ signs from being
+                // interpreted as LaTeX delimiters (e.g. "$10", "$257.00")
                 messageContent.textContent = content;
             } else {
-                // Render markdown + LaTeX for bot messages
+                // Render markdown first, then let KaTeX process the LaTeX blocks
                 messageContent.innerHTML = markdownToHtml(content);
                 renderMath(messageContent);
             }
