@@ -45,6 +45,8 @@ class ChatView(CreateAPIView):
     @classmethod
     def get_llm(cls):
         if cls._llm_instance is None:
+            if not settings.GEMINI_API_KEY:
+                raise ValueError("GEMINI_API_KEY is not configured. Please set it in the .env file.")
             cls._llm_instance = ChatGoogleGenerativeAI(
                 model="gemini-2.5-flash",  
                 google_api_key=settings.GEMINI_API_KEY,
@@ -101,7 +103,10 @@ class ChatView(CreateAPIView):
         try:
             llm = self.get_llm()
         except Exception as e:
-            raise ValidationError(f"LLM initialization failed: {str(e)}")
+            return Response(
+                {"detail": f"AI service unavailable: {str(e)}"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
         
         # Professional prompt for comprehensive math assistance
         prompt = ChatPromptTemplate.from_messages([
@@ -118,7 +123,7 @@ MATH FORMATTING RULES (CRITICAL - you MUST follow these exactly):
 - For ALL mathematical expressions, variables, numbers in equations, and symbols, you MUST use LaTeX wrapped in dollar sign delimiters.
 - Use single dollar signs $...$ for inline math expressions within a sentence. Example: The result is $x = 5$.
 - Use double dollar signs $$...$$ for display math (standalone equations on their own line). Example:
-$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
+$$x = \\frac{{-b \\pm \\sqrt{{b^2 - 4ac}}}}{{2a}}$$
 - Use LaTeX commands for all math operations: \\frac{{}}{{}}, \\times, \\div, \\sqrt{{}}, \\pm, \\leq, \\geq, \\neq, \\sum, \\int, \\infty, etc.
 - For percentages, write $17\\%$ not 17%.
 - For currency values mentioned in math context, write $\\$10.00$ for inline.
