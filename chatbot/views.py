@@ -9,7 +9,58 @@ from .serializers import ChatRequestSerializer, ChatResponseSerializer, EmailSer
 from django.conf import settings
 from django.contrib.sessions.models import Session
 import uuid
+import re
 
+
+def sanitize_latex_to_plain(text):
+    """Convert LaTeX math to plain readable text so frontends without
+    a LaTeX renderer (KaTeX/MathJax) can display the response cleanly."""
+
+    # Remove display math delimiters $$...$$
+    text = re.sub(r'\$\$(.+?)\$\$', r'\1', text, flags=re.DOTALL)
+    # Remove inline math delimiters $...$
+    text = re.sub(r'\$(.+?)\$', r'\1', text)
+
+    # Common LaTeX commands → plain text / Unicode
+    text = text.replace('\\times', '×')
+    text = text.replace('\\div', '÷')
+    text = text.replace('\\pm', '±')
+    text = text.replace('\\mp', '∓')
+    text = text.replace('\\leq', '≤')
+    text = text.replace('\\geq', '≥')
+    text = text.replace('\\neq', '≠')
+    text = text.replace('\\approx', '≈')
+    text = text.replace('\\infty', '∞')
+    text = text.replace('\\pi', 'π')
+    text = text.replace('\\alpha', 'α')
+    text = text.replace('\\beta', 'β')
+    text = text.replace('\\theta', 'θ')
+    text = text.replace('\\sum', '∑')
+    text = text.replace('\\int', '∫')
+    text = text.replace('\\rightarrow', '→')
+    text = text.replace('\\leftarrow', '←')
+    text = text.replace('\\Rightarrow', '⇒')
+    text = text.replace('\\cdot', '·')
+    text = text.replace('\\ldots', '...')
+    text = text.replace('\\%', '%')
+    text = text.replace('\\$', '$')
+    text = text.replace('\\\\', '\\')
+
+    # \frac{a}{b} → (a)/(b)
+    text = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'(\1)/(\2)', text)
+    # \sqrt{x} → √(x)
+    text = re.sub(r'\\sqrt\{([^}]*)\}', r'√(\1)', text)
+    # \text{...} → just the content
+    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
+    # \left and \right delimiters → just the bracket
+    text = re.sub(r'\\left([(\[{|])', r'\1', text)
+    text = re.sub(r'\\right([)\]}|])', r'\1', text)
+    # Remove remaining \commandname (single backslash commands without braces)
+    text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    # Clean up extra braces used for LaTeX grouping
+    text = text.replace('{', '').replace('}', '')
+
+    return text.strip()
 
 
 class EmailView(CreateAPIView):
@@ -51,6 +102,7 @@ class ChatView(CreateAPIView):
                 model="gemini-2.5-flash",  
                 google_api_key=settings.GEMINI_API_KEY,
                 temperature=0.5,
+                max_output_tokens=1024,
             )
         return cls._llm_instance
 
@@ -87,9 +139,9 @@ class ChatView(CreateAPIView):
         # Chat processing logic
         chat_history_key = f'chat_history_{session_id}'
         
-        # Load last 10 messages (5 exchanges) for better context
+        # Load last 6 messages (3 exchanges) for context while saving tokens
         history_data = session_data.get(chat_history_key, [])
-        recent_history = history_data[-10:] if len(history_data) > 10 else history_data
+        recent_history = history_data[-6:] if len(history_data) > 6 else history_data
         
         # Build history as LangChain message objects
         history_messages = []
@@ -108,41 +160,9 @@ class ChatView(CreateAPIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
         
-        # Professional prompt for comprehensive math assistance
+        # Concise system prompt — formatting is handled by post-processing
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a professional AI Mathematics Assistant designed to provide comprehensive, accurate, and well-explained solutions to mathematical problems.
-
-Your responsibilities:
-- Provide detailed step-by-step explanations for mathematical problems
-- Show all working steps clearly and logically
-- Explain concepts when necessary to aid understanding
-- Always respond in the same language as the user's query
-- Cover topics including: Algebra, Calculus, Geometry, Statistics, Trigonometry, Linear Algebra, Discrete Mathematics, and more
-
-MATH FORMATTING RULES (CRITICAL - you MUST follow these exactly):
-- For ALL mathematical expressions, variables, numbers in equations, and symbols, you MUST use LaTeX wrapped in dollar sign delimiters.
-- Use single dollar signs $...$ for inline math expressions within a sentence. Example: The result is $x = 5$.
-- Use double dollar signs $$...$$ for display math (standalone equations on their own line). Example:
-$$x = \\frac{{-b \\pm \\sqrt{{b^2 - 4ac}}}}{{2a}}$$
-- Use LaTeX commands for all math operations: \\frac{{}}{{}}, \\times, \\div, \\sqrt{{}}, \\pm, \\leq, \\geq, \\neq, \\sum, \\int, \\infty, etc.
-- For percentages, write $17\\%$ not 17%.
-- For currency values mentioned in math context, write $\\$10.00$ for inline.
-- NEVER write raw LaTeX commands without dollar sign delimiters.
-- NEVER use \\[ ... \\] or \\( ... \\) delimiters. ONLY use $...$ and $$...$$.
-
-TEXT FORMATTING RULES:
-- Use plain text for step labels: Step 1: , Step 2: , etc. Do NOT use asterisks or any bold/italic markdown syntax (no ** or * around text).
-- Use blank lines between steps for readability.
-- Use numbered lists (1. 2. 3.) or dashes (- ) when listing items.
-- Separate explanation text from math equations clearly.
-- Keep plain text (non-math) outside of dollar sign delimiters.
-- NEVER use markdown bold (**text**) or italic (*text*) formatting. All non-math text must be plain text only.
-
-For non-mathematical queries:
-- Politely inform the user that you specialize in mathematics only
-- Suggest they ask a math-related question instead
-
-Maintain a professional, helpful, and educational tone in all responses."""),
+            ("system", """You are a math assistant. Solve math problems with clear, concise step-by-step solutions. Respond in the user's language. Keep answers brief: show essential steps and the final answer only. For non-math queries, politely say you only help with math. Do not use markdown bold/italic formatting."""),
             MessagesPlaceholder(variable_name="history"),
             ("human", "{input}"),
         ])
@@ -153,6 +173,13 @@ Maintain a professional, helpful, and educational tone in all responses."""),
         try:
             response = chain.invoke({"input": user_message, "history": history_messages})
             ai_response = response.content
+
+            # Post-process: strip markdown bold/italic that the LLM may still produce
+            ai_response = re.sub(r'\*\*([^*]+)\*\*', r'\1', ai_response)  # Remove **bold**
+            ai_response = re.sub(r'(?<!\\)\*([^*]+)\*', r'\1', ai_response)  # Remove *italic*
+
+            # Convert LaTeX math to plain readable text
+            ai_response = sanitize_latex_to_plain(ai_response)
         except Exception as e:
             return Response({"detail": f"Chat service error: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
         
@@ -161,9 +188,9 @@ Maintain a professional, helpful, and educational tone in all responses."""),
         full_history.append({'type': 'human', 'content': user_message})
         full_history.append({'type': 'ai', 'content': ai_response})
         
-        # Limit history to last 10 messages for optimal performance and context
-        if len(full_history) > 10:
-            full_history = full_history[-10:]
+        # Limit history to last 6 messages for optimal performance and token savings
+        if len(full_history) > 6:
+            full_history = full_history[-6:]
         
         # Update session
         session_data[chat_history_key] = full_history
